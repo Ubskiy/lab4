@@ -99,6 +99,9 @@ get_circus_test_files() {
     return 0
 }
 
+# --------------------
+# 1) Лучший студент по оценке
+# --------------------
 best_by_mark_count() {
     local group="$1"
     local mark="$2"
@@ -175,17 +178,21 @@ best_by_mark_count() {
             if (m == "") next
 
             if ($1 == grp && m == wanted && $2 == st) {
-                printf "Группа: %-8s Студент: %-20s Файл: %-25s Вопрос: %-3s Оценка: %s\n", \
+                printf "Группа: %-8s Студент: %-20s Файл: %-25s Правильных ответы: %-3s Оценка: %s\n", \
                        $1, $2, FILENAME, $4, m
             }
         }
     ' "${TEST_FILES[@]}"
 }
 
+# --------------------
+# 2) Лучшая посещаемость за период + выбор предмета
+# --------------------
 best_attendance_for_period() {
     local group="$1"
     local from_l="$2"
     local to_l="$3"
+    local subject_choice="$4"
 
     if ! group_exists "$group"; then
         error "Группа \"$group\" не найдена."
@@ -195,26 +202,32 @@ best_attendance_for_period() {
     fi
 
     if [[ ! "$from_l" =~ ^[0-9]+$ || ! "$to_l" =~ ^[0-9]+$ ]]; then
-        error "Номера занятий должны быть целыми числами, а не \"$from_l\" и \"$to_l\"."
-        return 1
-    fi
-
-    if (( from_l <= 0 || to_l <= 0 )); then
-        error "Номера занятий должны быть >= 1."
+        error "Номера занятий должны быть целыми числами."
         return 1
     fi
 
     if (( from_l > to_l )); then
-        echo "ВНИМАНИЕ: начало периода ($from_l) больше конца ($to_l). Поменяю местами."
+        echo "ВНИМАНИЕ: начало периода больше конца. Меняю местами."
         local tmp="$from_l"
         from_l="$to_l"
         to_l="$tmp"
     fi
 
-    local attendance_file="$CIRCUS_DIR/${group}-attendance"
+    case "$subject_choice" in
+        1)
+            attendance_file="$CIRCUS_DIR/${group}-attendance"
+            ;;
+        2)
+            attendance_file="$POP_DIR/${group}-attendance"
+            ;;
+        *)
+            error "Некорректный выбор предмета: $subject_choice"
+            return 1
+            ;;
+    esac
 
     if [[ ! -f "$attendance_file" ]]; then
-        error "Файл посещаемости для группы $group не найден: $attendance_file"
+        error "Файл посещаемости не найден: $attendance_file"
         return 1
     fi
 
@@ -228,44 +241,29 @@ best_attendance_for_period() {
 
             if (NR == 1) {
                 maxlen = length(bits)
-                if (from < 1) from = 1
-                if (to > maxlen) {
-                    printf "ВНИМАНИЕ: Верхняя граница %d > количества занятий %d. Обрезаю до %d.\n", to, maxlen, maxlen > "/dev/stderr"
-                    to = maxlen
-                }
+                if (to > maxlen) to = maxlen
             }
 
             present = 0
             for (i = from; i <= to; i++) {
-                ch = substr(bits, i, 1)
-                if (ch == "1") present++
+                if (substr(bits, i, 1) == "1") present++
             }
             cnt[name] = present
         }
         END {
-            if (length(cnt) == 0) {
-                print "Нет данных по посещаемости для этого периода."
-                exit
-            }
-
             max = -1
-            for (s in cnt) {
-                if (cnt[s] > max) {
-                    max = cnt[s]
-                }
-            }
+            for (s in cnt) if (cnt[s] > max) max = cnt[s]
 
-            printf "Максимальное количество присутствий в периоде [%d..%d]: %d\n", from, to, max
-            print "Студенты с такой посещаемостью:"
-            for (s in cnt) {
-                if (cnt[s] == max) {
-                    printf " - %s (посещений: %d)\n", s, cnt[s]
-                }
-            }
+            print "Максимальное присутствий: " max
+            print "Студенты:"        
+            for (s in cnt) if (cnt[s] == max) printf " - %s (%d)\n", s, cnt[s]
         }
     ' "$attendance_file"
 }
 
+# --------------------
+# 3) Лучшие по Цирковому делу
+# --------------------
 best_students_circus() {
     echo "Лучшие студенты по предмету \"Цирковое дело\""
 
@@ -284,38 +282,31 @@ best_students_circus() {
             m = $5
             gsub(/[^0-9]/, "", m)
             if (m == "") next
-
             mark = m + 0
-            if (mark <= 0 || mark > 5) next
-
             key = $2
             sum[key] += mark
             cnt[key]++
         }
         END {
-            if (length(cnt) == 0) {
-                print "Нет данных по оценкам по Цирковому делу."
-                exit
-            }
-
             maxavg = -1
             for (s in cnt) {
-                avg = sum[s] / cnt[s]
+                avg = sum[s]/cnt[s]
                 if (avg > maxavg) maxavg = avg
             }
 
             printf "Максимальный средний балл: %.2f\n", maxavg
-            print "Студенты с таким средним баллом:"
+            print "Студенты:"            
             for (s in cnt) {
-                avg = sum[s] / cnt[s]
-                if (avg == maxavg) {
-                    printf " - %s (средний балл: %.2f, кол-во оценок: %d)\n", s, avg, cnt[s]
-                }
+                avg = sum[s]/cnt[s]
+                if (avg == maxavg) printf " - %s (%.2f)\n", s, avg
             }
         }
     ' "${CFILES[@]}"
 }
 
+# --------------------
+# 4) Средняя оценка студента
+# --------------------
 avg_mark_for_student_subject() {
     local student="$1"
     local subject_choice="$2"
@@ -341,98 +332,102 @@ avg_mark_for_student_subject() {
             fi
             ;;
         *)
-            error "Некорректный выбор предмета: $subject_choice"
+            error "Некорректный выбор предмета"
             return 1
             ;;
     esac
 
     if ((${#TFILES[@]} == 0)); then
-        error "Для предмета \"$subj_name\" не найдено файлов тестов."
+        error "Нет тестов по предмету \"$subj_name\""
         return 1
     fi
 
-    echo "Средняя оценка для студента \"$student\" по предмету \"$subj_name\""
+    echo "Средняя оценка студента $student по предмету $subj_name"
 
     awk -F';' -v st="$student" '
         {
             m = $5
             gsub(/[^0-9]/, "", m)
-            if (m == "") next
-
             mark = m + 0
-            if (mark <= 0 || mark > 5) next
-
-            if ($2 == st) {
+            if ($2 == st && mark > 0 && mark <= 5) {
                 sum += mark
                 cnt++
             }
         }
         END {
             if (cnt == 0) {
-                print "Нет данных по данному студенту и предмету."
+                print "Нет данных"
                 exit
             }
-            avg = sum / cnt
-            printf "Средний балл: %.2f (кол-во оценок: %d)\n", avg, cnt
+            printf "Средняя: %.2f (оценок: %d)\n", sum/cnt, cnt
         }
     ' "${TFILES[@]}"
 }
 
+# --------------------
+# Главное меню
+# --------------------
 main_menu() {
     check_fs
 
     while true; do
         echo
         echo "Выберите действие:"
-        echo " 1) Лучший студент группы по количеству 5/4/3 (по всем тестам)"
+        echo " 1) Лучший студент группы по количеству 5/4/3"
         echo " 2) Лучшая посещаемость группы за период занятий"
-        echo " 3) Лучшие студенты по предмету \"Цирковое дело\""
+        echo " 3) Лучшие студенты по Цирковому делу"
         echo " 4) Средняя оценка студента по предмету"
-        echo " 5) Показать список доступных групп"
+        echo " 5) Показать список групп"
         echo " 0) Выход"
         read -rp "Ваш выбор: " choice
 
         case "$choice" in
             1)
                 list_groups
-                read -rp "Введите код группы (например, A-06-04): " group
-                read -rp "Введите интересующую оценку (3/4/5): " mark
+                read -rp "Введите код группы: " group
+                read -rp "Введите оценку (3/4/5): " mark
                 echo
                 best_by_mark_count "$group" "$mark"
                 press_enter
                 ;;
+
             2)
                 list_groups
-                read -rp "Введите код группы (например, A-06-04): " group
-                read -rp "Номер занятия ОТ (>=1): " from_l
-                read -rp "Номер занятия ДО (>=1): " to_l
-                echo
-                best_attendance_for_period "$group" "$from_l" "$to_l"
-                press_enter
-                ;;
-            3)
-                echo
-                best_students_circus
-                press_enter
-                ;;
-            4)
-                read -rp "Введите логин студента (например, PashkovskyA): " student
+                read -rp "Введите код группы: " group
+                read -rp "Номер занятия ОТ: " from_l
+                read -rp "Номер занятия ДО: " to_l
                 echo "Выберите предмет:"
                 echo " 1) Цирковое дело"
                 echo " 2) Поп-Культуроведение"
-                read -rp "Ваш выбор (1/2): " subj_choice
+                read -rp "Ваш выбор: " subject_choice
+                echo
+                best_attendance_for_period "$group" "$from_l" "$to_l" "$subject_choice"
+                press_enter
+                ;;
+
+            3)
+                best_students_circus
+                press_enter
+                ;;
+
+            4)
+                read -rp "Введите логин студента: " student
+                echo "Выберите предмет:"                read -rp "Ваш выбор (1/2): " subj_choice
                 echo
                 avg_mark_for_student_subject "$student" "$subj_choice"
                 press_enter
                 ;;
+
             5)
                 list_groups
                 press_enter
                 ;;
+
             0)
                 echo "Выход."
                 exit 0
                 ;;
+
             *)
                 echo "Неверный пункт меню."
                 ;;
@@ -441,4 +436,5 @@ main_menu() {
 }
 
 main_menu
+
 
